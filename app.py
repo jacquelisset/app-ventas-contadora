@@ -1,128 +1,145 @@
-import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from fpdf import FPDF
-from datetime import datetime
+import streamlit as st
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from io import BytesIO
-import os
+import locale
+import calendar
 
-sns.set(style="whitegrid")
+locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')  # Para que los meses se vean en español
 
-def cargar_datos_excel(archivo):
-    df = pd.read_excel(archivo, engine='openpyxl', parse_dates=['fecha'])
-    df['año'] = df['fecha'].dt.year
-    df['mes'] = df['fecha'].dt.strftime('%b')
+# --- Funciones ---
+def procesar_datos(df):
+    col_fecha = [col for col in df.columns if col.strip().lower() == 'fecha'][0]
+    df[col_fecha] = pd.to_datetime(df[col_fecha])
+    df['Fecha'] = df[col_fecha]
+    df['Mes'] = df['Fecha'].dt.month
+    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: calendar.month_name[x].capitalize())
+    df['Año'] = df['Fecha'].dt.year
+    df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
 
-def generar_resumen_anual(df):
-    resumen = df.groupby('año')['venta'].sum().reset_index()
-    resumen['venta'] = resumen['venta'].round(2)
-    resumen = resumen.sort_values('año')
-    resumen['crecimiento'] = resumen['venta'].pct_change().fillna(0) * 100
-    return resumen
+def filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, fecha_inicio, fecha_fin):
+    return df[
+        (df['cliente'].isin(clientes_seleccionados)) &
+        (df['categoria'].isin(categorias_seleccionadas)) &
+        (df['Fecha'] >= fecha_inicio) &
+        (df['Fecha'] <= fecha_fin)
+    ]
 
-def graficar_comparacion(resumen):
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=resumen, x='año', y='venta', palette='viridis')
-    plt.title("Comparación de Ventas por Año")
-    plt.ylabel("Ventas Totales")
+def generar_graficos(df):
+    figs = {}
+
+    df['Tipo Proveedor'] = df['categoria'].apply(lambda x: 'Nuevo' if 'nuevo' in str(x).lower() else 'Frecuente')
+
+    def crear_figura(df_group, tipo, title, xlabel='', ylabel='Ventas ($)', color='skyblue'):
+        fig, ax = plt.subplots(figsize=(10, 4))
+        df_group.plot(kind=tipo, ax=ax, color=color, title=title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        return fig
+
+    figs['compras_mensuales'] = crear_figura(df.groupby('Periodo')['venta'].sum(), 'bar', 'Total de Compras por Mes')
+    figs['ventas_cliente'] = crear_figura(df.groupby('cliente')['venta'].sum().sort_values(ascending=False), 'bar', 'Ventas por Cliente')
+    figs['ventas_categoria'] = crear_figura(df.groupby('categoria')['venta'].sum().sort_values(ascending=False), 'bar', 'Ventas por Categoría')
+    figs['totales_anuales'] = crear_figura(df.groupby('Año')['venta'].sum(), 'bar', 'Total Ventas por Año', color=['#1f77b4', '#ff7f0e'])
+
+    fig5, ax5 = plt.subplots(figsize=(10, 4))
+    df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
+    ax5.set_xlabel('Mes')
+    ax5.set_ylabel('Ventas ($)')
+    plt.xticks(rotation=45)
     plt.tight_layout()
-    ruta = "grafico_anual.png"
-    plt.savefig(ruta)
-    plt.close()
-    return ruta
+    figs['comparacion_anual'] = fig5
 
-def graficar_mensual(df):
-    df_mensual = df.groupby(['año', 'mes'])['venta'].sum().reset_index()
-    df_mensual['mes'] = pd.Categorical(df_mensual['mes'],
-        categories=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], ordered=True)
-    df_mensual = df_mensual.sort_values(['mes'])
-
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=df_mensual, x='mes', y='venta', hue='año', marker="o")
-    plt.title("Evolución Mensual de Ventas")
-    plt.ylabel("Ventas")
+    fig2, ax2 = plt.subplots(figsize=(6, 6))
+    df['Tipo Proveedor'].value_counts().plot(kind='pie', autopct='%1.1f%%', ax=ax2, title='Distribución Tipo Proveedor')
+    ax2.set_ylabel('')
     plt.tight_layout()
-    ruta = "grafico_mensual.png"
-    plt.savefig(ruta)
-    plt.close()
-    return ruta
+    figs['tipo_proveedor'] = fig2
 
-def graficar_pie(df):
-    df_categoria = df.groupby('categoria')['venta'].sum().reset_index()
-    plt.figure(figsize=(6, 6))
-    plt.pie(df_categoria['venta'], labels=df_categoria['categoria'], autopct='%1.1f%%', startangle=140)
-    plt.title("Distribución de Ventas por Categoría")
-    ruta = "grafico_pie.png"
-    plt.savefig(ruta)
-    plt.close()
-    return ruta
+    return figs
 
-def exportar_pdf_con_graficos(resumen, rutas_graficos):
-    pdf = FPDF()
-    pdf.add_page()
+def generar_pdf(nombre_archivo, df, figs, resumen_texto):
+    doc = SimpleDocTemplate(nombre_archivo, pagesize=A4)
+    styles = getSampleStyleSheet()
+    estilo_titulo = styles['Title']
+    estilo_normal = styles['Normal']
+    estilo_titulo.alignment = 1  # Centrado
 
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, "Reporte de Ventas Anual", ln=True, align="C")
+    elements = [Paragraph("📄 Informe Contable Detallado", estilo_titulo), Spacer(1, 12)]
+    elements.append(Paragraph(resumen_texto, estilo_normal))
+    elements.append(Spacer(1, 12))
 
-    pdf.set_font("Arial", size=12)
-    pdf.ln(10)
-    for _, fila in resumen.iterrows():
-        texto = f"Año: {int(fila['año'])} | Ventas: ${fila['venta']:.2f} | Crecimiento: {fila['crecimiento']:.2f}%"
-        pdf.cell(0, 10, texto, ln=True)
+    for key in figs:
+        buffer = BytesIO()
+        figs[key].savefig(buffer, format='png')
+        buffer.seek(0)
+        elements.append(Image(buffer, width=450, height=250))
+        elements.append(Spacer(1, 12))
 
-    pdf.ln(10)
-    for ruta in rutas_graficos:
-        pdf.image(ruta, w=180)
-        pdf.ln(5)
+    doc.build(elements)
 
-    nombre_pdf = "reporte_ventas.pdf"
-    pdf.output(nombre_pdf)
+# --- Streamlit App ---
+st.set_page_config("Dashboard Contable", layout="wide")
+st.title("📊 Dashboard Contable para Empresas")
 
-    with open(nombre_pdf, "rb") as f:
-        pdf_bytes = BytesIO(f.read())
+archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx"])
 
-    return pdf_bytes
-
-# --- INTERFAZ STREAMLIT ---
-st.title("📊 Reporte de Ventas para Contadores")
-
-archivo = st.file_uploader("📁 Selecciona el archivo Excel de ventas", type=[".xlsx"])
-
-if archivo is not None:
+if archivo:
     try:
-        df = cargar_datos_excel(archivo)
+        df = pd.read_excel(archivo)
+        df = procesar_datos(df)
 
-        cliente = st.selectbox("Filtrar por cliente (opcional):", ["Todos"] + sorted(df['cliente'].unique().tolist()))
-        categoria = st.selectbox("Filtrar por categoría (opcional):", ["Todas"] + sorted(df['categoria'].unique().tolist()))
+        st.sidebar.header("📌 Filtros")
+        clientes = df['cliente'].unique().tolist()
+        categorias = df['categoria'].unique().tolist()
 
-        if cliente != "Todos":
-            df = df[df['cliente'] == cliente]
-        if categoria != "Todas":
-            df = df[df['categoria'] == categoria]
+        clientes_seleccionados = st.sidebar.multiselect("Clientes", clientes, default=clientes)
+        categorias_seleccionadas = st.sidebar.multiselect("Categorías", categorias, default=categorias)
 
-        resumen = generar_resumen_anual(df)
-        ruta_barra = graficar_comparacion(resumen)
-        ruta_linea = graficar_mensual(df)
-        ruta_pie = graficar_pie(df)
+        fecha_min, fecha_max = df['Fecha'].min(), df['Fecha'].max()
+        fecha_inicio, fecha_fin = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
 
-        st.subheader("Resumen Anual")
-        st.dataframe(resumen)
-        st.image(ruta_barra, caption="Ventas por Año", use_container_width=True)
-        st.image(ruta_linea, caption="Ventas Mensuales", use_container_width=True)
-        st.image(ruta_pie, caption="Gráfico Circular", use_container_width=True)
+        if isinstance(fecha_inicio, list) or isinstance(fecha_inicio, tuple):
+            fecha_inicio, fecha_fin = fecha_inicio
 
-        pdf_bytes = exportar_pdf_con_graficos(resumen, [ruta_barra, ruta_linea, ruta_pie])
+        df_filtrado = filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
 
-        st.download_button(
-            label="📥 Descargar PDF del Reporte",
-            data=pdf_bytes,
-            file_name="reporte_ventas.pdf",
-            mime="application/pdf"
-        )
+        st.markdown(f"### Registros encontrados: {len(df_filtrado)}")
+
+        total = df_filtrado['venta'].sum()
+        iva = total * 0.19
+        neto = total - iva
+        ticket_promedio = df_filtrado.groupby('cliente')['venta'].sum().mean()
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🧾 Total Ventas", f"${total:,.2f}")
+        col2.metric("💵 Neto", f"${neto:,.2f}")
+        col3.metric("📈 Ticket Promedio", f"${ticket_promedio:,.2f}")
+
+        figs = generar_graficos(df_filtrado)
+
+        for key in figs:
+            st.pyplot(figs[key])
+
+        resumen_texto = f"""
+        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.
+        <br/><br/>
+        <b>Total:</b> ${total:,.2f}<br/>
+        <b>IVA (19%):</b> ${iva:,.2f}<br/>
+        <b>Neto:</b> ${neto:,.2f}<br/>
+        <b>Ticket Promedio por Cliente:</b> ${ticket_promedio:,.2f}
+        """
+
+        if st.button("📄 Generar Informe PDF Unificado"):
+            generar_pdf("informe_contable.pdf", df_filtrado, figs, resumen_texto)
+            with open("informe_contable.pdf", "rb") as f:
+                st.download_button("📥 Descargar PDF", f, file_name="informe_contable.pdf")
 
     except Exception as e:
-        st.error(f"Error procesando el archivo: {e}")
-else:
-    st.info("Por favor, sube un archivo Excel con columnas: fecha, venta, cliente, categoria")
+        st.error(f"❌ Error al procesar el archivo: {e}")
