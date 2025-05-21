@@ -4,20 +4,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from fpdf import FPDF
+from datetime import datetime
 from io import BytesIO
-import tempfile
-import os
 
 sns.set(style="whitegrid")
 
-def cargar_datos_excel(file, cliente=None, categoria=None):
-    df = pd.read_excel(file, engine='openpyxl', parse_dates=['fecha'])
+# --- Funciones ---
+
+def cargar_datos_excel(archivo_excel):
+    df = pd.read_excel(archivo_excel, engine='openpyxl', parse_dates=['fecha'])
     df['año'] = df['fecha'].dt.year
     df['mes'] = df['fecha'].dt.strftime('%b')
-    if cliente:
-        df = df[df['cliente'] == cliente]
-    if categoria:
-        df = df[df['categoria'] == categoria]
     return df
 
 def generar_resumen_anual(df):
@@ -27,39 +24,44 @@ def generar_resumen_anual(df):
     resumen['crecimiento'] = resumen['venta'].pct_change().fillna(0) * 100
     return resumen
 
-def graficar_comparacion(resumen, ruta_guardar):
-    plt.figure(figsize=(10, 5))
+def graficar_comparacion(resumen):
+    plt.figure(figsize=(8, 5))
     sns.barplot(data=resumen, x='año', y='venta', palette='viridis')
     plt.title("Comparación de Ventas por Año")
     plt.ylabel("Ventas Totales")
     plt.tight_layout()
-    plt.savefig(ruta_guardar)
+    ruta = "grafico_barra.png"
+    plt.savefig(ruta)
     plt.close()
+    return ruta
 
-def graficar_mensual(df, ruta_guardar):
+def graficar_mensual(df):
     df_mensual = df.groupby(['año', 'mes'])['venta'].sum().reset_index()
     df_mensual['mes'] = pd.Categorical(df_mensual['mes'],
         categories=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'], ordered=True)
     df_mensual = df_mensual.sort_values(['mes'])
-    plt.figure(figsize=(10, 5))
-    sns.lineplot(data=df_mensual, x='mes', y='venta', hue='año', marker='o')
+
+    plt.figure(figsize=(8, 5))
+    sns.lineplot(data=df_mensual, x='mes', y='venta', hue='año', marker="o")
     plt.title("Evolución Mensual de Ventas")
     plt.ylabel("Ventas")
     plt.tight_layout()
-    plt.savefig(ruta_guardar)
+    ruta = "grafico_linea.png"
+    plt.savefig(ruta)
     plt.close()
+    return ruta
 
-def graficar_circular_categoria(df, ruta_guardar):
-    resumen_cat = df.groupby('categoria')['venta'].sum()
-    plt.figure(figsize=(7,7))
-    resumen_cat.plot.pie(autopct='%1.1f%%', startangle=140, colors=sns.color_palette('pastel'))
+def graficar_pie(df):
+    resumen_pie = df.groupby('categoria')['venta'].sum()
+    plt.figure(figsize=(6, 6))
+    plt.pie(resumen_pie, labels=resumen_pie.index, autopct='%1.1f%%', startangle=140)
     plt.title("Distribución de Ventas por Categoría")
-    plt.ylabel('')
-    plt.tight_layout()
-    plt.savefig(ruta_guardar)
+    ruta = "grafico_pie.png"
+    plt.savefig(ruta)
     plt.close()
+    return ruta
 
-def exportar_pdf_con_graficos(resumen, rutas_graficos):
+def exportar_pdf_con_graficos(resumen, imagenes):
     pdf = FPDF()
     pdf.add_page()
 
@@ -73,51 +75,56 @@ def exportar_pdf_con_graficos(resumen, rutas_graficos):
         pdf.cell(0, 10, texto, ln=True)
 
     pdf.ln(10)
-    for ruta in rutas_graficos:
-        pdf.image(ruta, w=180)
+    for imagen in imagenes:
+        pdf.image(imagen, w=180)
         pdf.ln(5)
 
-    pdf_bytes = BytesIO()
-    pdf.output(pdf_bytes)
-    pdf_bytes.seek(0)
-    return pdf_bytes
+    # Guardar el PDF en memoria
+    pdf_buffer = BytesIO()
+    pdf.output(pdf_buffer)
+    pdf_buffer.seek(0)
+    return pdf_buffer
 
-# --- Streamlit App ---
-st.title("📈 App de Ventas para Contadoras")
+# --- Interfaz Streamlit ---
 
-archivo = st.file_uploader("Sube tu archivo Excel (.xlsx)", type=["xlsx"])
+st.set_page_config(page_title="Reporte de Ventas", layout="centered")
+st.title("📊 Aplicación de Reportes para Contadores")
+
+archivo = st.file_uploader("📂 Selecciona el archivo Excel de ventas", type=["xlsx"])
 
 if archivo:
-    df_base = pd.read_excel(archivo, engine='openpyxl', parse_dates=['fecha'])
-    clientes = df_base['cliente'].dropna().unique().tolist()
-    categorias = df_base['categoria'].dropna().unique().tolist()
+    try:
+        df = cargar_datos_excel(archivo)
 
-    cliente_sel = st.selectbox("Filtrar por cliente (opcional)", [""] + clientes)
-    categoria_sel = st.selectbox("Filtrar por categoría (opcional)", [""] + categorias)
+        # Filtros
+        clientes = st.multiselect("Filtrar por cliente", df['cliente'].unique())
+        categorias = st.multiselect("Filtrar por categoría", df['categoria'].unique())
 
-    df = cargar_datos_excel(archivo, cliente_sel if cliente_sel else None, categoria_sel if categoria_sel else None)
+        if clientes:
+            df = df[df['cliente'].isin(clientes)]
+        if categorias:
+            df = df[df['categoria'].isin(categorias)]
 
-    if not df.empty:
+        st.success("Datos cargados correctamente.")
+        st.dataframe(df.head())
+
         resumen = generar_resumen_anual(df)
+        ruta_barra = graficar_comparacion(resumen)
+        ruta_linea = graficar_mensual(df)
+        ruta_pie = graficar_pie(df)
 
-        # Crear archivos temporales para los gráficos
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            ruta_barra = os.path.join(tmpdirname, "grafico_anual.png")
-            ruta_linea = os.path.join(tmpdirname, "grafico_mensual.png")
-            ruta_pie = os.path.join(tmpdirname, "grafico_categoria.png")
+        st.image(ruta_barra, caption="Gráfico de Barras", use_column_width=True)
+        st.image(ruta_linea, caption="Gráfico de Línea", use_column_width=True)
+        st.image(ruta_pie, caption="Gráfico Circular", use_column_width=True)
 
-            graficar_comparacion(resumen, ruta_barra)
-            graficar_mensual(df, ruta_linea)
-            graficar_circular_categoria(df, ruta_pie)
+        pdf_buffer = exportar_pdf_con_graficos(resumen, [ruta_barra, ruta_linea, ruta_pie])
 
-            st.subheader("Gráficos de Ventas")
-            st.image(ruta_barra, caption="Comparación Anual")
-            st.image(ruta_linea, caption="Evolución Mensual")
-            st.image(ruta_pie, caption="Distribución por Categoría")
+        st.download_button(
+            label="📥 Descargar PDF del reporte",
+            data=pdf_buffer,
+            file_name="reporte_ventas.pdf",
+            mime="application/pdf"
+        )
 
-            pdf_bytes = exportar_pdf_con_graficos(resumen, [ruta_barra, ruta_linea, ruta_pie])
-
-            st.download_button("Descargar reporte en PDF con gráficos", data=pdf_bytes, file_name="reporte_ventas.pdf")
-
-    else:
-        st.warning("No se encontraron datos con esos filtros.")
+    except Exception as e:
+        st.error(f"Ocurrió un error: {e}")
