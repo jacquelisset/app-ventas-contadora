@@ -3,12 +3,16 @@ import matplotlib.pyplot as plt
 import streamlit as st
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
-import locale
 import calendar
 
-locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')  # Para que los meses se vean en español
+# Diccionario manual de meses en español
+MESES_ES = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+}
 
 # --- Funciones ---
 def procesar_datos(df):
@@ -16,7 +20,7 @@ def procesar_datos(df):
     df[col_fecha] = pd.to_datetime(df[col_fecha])
     df['Fecha'] = df[col_fecha]
     df['Mes'] = df['Fecha'].dt.month
-    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: calendar.month_name[x].capitalize())
+    df['Mes_Nombre'] = df['Fecha'].dt.month.map(MESES_ES)
     df['Año'] = df['Fecha'].dt.year
     df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
@@ -25,13 +29,12 @@ def filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, fecha_in
     return df[
         (df['cliente'].isin(clientes_seleccionados)) &
         (df['categoria'].isin(categorias_seleccionadas)) &
-        (df['Fecha'] >= fecha_inicio) &
+        (df['Fecha'] >= fecha_inicio) & 
         (df['Fecha'] <= fecha_fin)
     ]
 
 def generar_graficos(df):
     figs = {}
-
     df['Tipo Proveedor'] = df['categoria'].apply(lambda x: 'Nuevo' if 'nuevo' in str(x).lower() else 'Frecuente')
 
     def crear_figura(df_group, tipo, title, xlabel='', ylabel='Ventas ($)', color='skyblue'):
