@@ -7,16 +7,19 @@ from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 import calendar
 
+# Diccionario para meses en español (calendar.month_name está en inglés)
+MESES_ES = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio',
+    7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+}
+
 # --- Funciones ---
 def procesar_datos(df):
     col_fecha = [col for col in df.columns if col.strip().lower() == 'fecha'][0]
     df[col_fecha] = pd.to_datetime(df[col_fecha])
     df['Fecha'] = df[col_fecha]
     df['Mes'] = df['Fecha'].dt.month
-    # Para obtener los meses en español sin usar locale:
-    meses_es = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
-    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: meses_es[x-1])
+    df['Mes_Nombre'] = df['Mes'].map(MESES_ES)
     df['Año'] = df['Fecha'].dt.year
     df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
@@ -88,12 +91,18 @@ def generar_pdf(nombre_archivo, df, figs, resumen_texto):
 st.set_page_config("Dashboard Contable", layout="wide")
 st.title("📊 Dashboard Contable para Empresas")
 
-archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx"])
+archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx", "xls"])
 
 if archivo:
     try:
-        # Leemos el Excel usando openpyxl como engine
-        df = pd.read_excel(archivo, engine='openpyxl')
+        if archivo.name.endswith('.xlsx'):
+            df = pd.read_excel(archivo, engine='openpyxl')
+        elif archivo.name.endswith('.xls'):
+            df = pd.read_excel(archivo, engine='xlrd')
+        else:
+            st.error("❌ Formato no soportado. Por favor sube un archivo .xlsx o .xls válido.")
+            st.stop()
+
         df = procesar_datos(df)
 
         st.sidebar.header("📌 Filtros")
@@ -129,8 +138,7 @@ if archivo:
             st.pyplot(figs[key])
 
         resumen_texto = f"""
-        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.
-        <br/><br/>
+        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.<br/><br/>
         <b>Total:</b> ${total:,.2f}<br/>
         <b>IVA (19%):</b> ${iva:,.2f}<br/>
         <b>Neto:</b> ${neto:,.2f}<br/>
