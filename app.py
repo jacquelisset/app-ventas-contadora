@@ -7,20 +7,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 import calendar
 
-# Diccionario para meses en español
-MESES_ES = {
-    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
-    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
-    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
-}
-
 # --- Funciones ---
 def procesar_datos(df):
     col_fecha = [col for col in df.columns if col.strip().lower() == 'fecha'][0]
     df[col_fecha] = pd.to_datetime(df[col_fecha])
     df['Fecha'] = df[col_fecha]
     df['Mes'] = df['Fecha'].dt.month
-    df['Mes_Nombre'] = df['Mes'].map(MESES_ES)
+    # Para obtener los meses en español sin usar locale:
+    meses_es = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: meses_es[x-1])
     df['Año'] = df['Fecha'].dt.year
     df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
@@ -53,10 +49,7 @@ def generar_graficos(df):
     figs['totales_anuales'] = crear_figura(df.groupby('Año')['venta'].sum(), 'bar', 'Total Ventas por Año', color=['#1f77b4', '#ff7f0e'])
 
     fig5, ax5 = plt.subplots(figsize=(10, 4))
-    df_pivot = df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum')
-    # Ordenar los meses en orden natural
-    df_pivot = df_pivot.reindex([MESES_ES[i] for i in range(1, 13)])
-    df_pivot.plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
+    df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
     ax5.set_xlabel('Mes')
     ax5.set_ylabel('Ventas ($)')
     plt.xticks(rotation=45)
@@ -99,7 +92,8 @@ archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["x
 
 if archivo:
     try:
-        df = pd.read_excel(archivo)
+        # Leemos el Excel usando openpyxl como engine
+        df = pd.read_excel(archivo, engine='openpyxl')
         df = procesar_datos(df)
 
         st.sidebar.header("📌 Filtros")
