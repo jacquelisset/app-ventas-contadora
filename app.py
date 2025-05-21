@@ -6,7 +6,13 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 import calendar
-import os
+
+# Intentar poner los meses en español, si falla usa el nombre en inglés
+try:
+    import locale
+    locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
+except:
+    pass
 
 # --- Funciones ---
 def procesar_datos(df):
@@ -34,7 +40,10 @@ def generar_graficos(df):
 
     def crear_figura(df_group, tipo, title, xlabel='', ylabel='Ventas ($)', color='skyblue'):
         fig, ax = plt.subplots(figsize=(10, 4))
-        df_group.plot(kind=tipo, ax=ax, color=color, title=title)
+        if tipo == 'bar':
+            df_group.plot(kind=tipo, ax=ax, color=color, title=title)
+        else:
+            df_group.plot(kind=tipo, ax=ax, title=title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         plt.xticks(rotation=45)
@@ -47,7 +56,8 @@ def generar_graficos(df):
     figs['totales_anuales'] = crear_figura(df.groupby('Año')['venta'].sum(), 'bar', 'Total Ventas por Año', color=['#1f77b4', '#ff7f0e'])
 
     fig5, ax5 = plt.subplots(figsize=(10, 4))
-    df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
+    pivot = df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').reindex(calendar.month_name[1:], axis=0)
+    pivot.plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
     ax5.set_xlabel('Mes')
     ax5.set_ylabel('Ventas ($)')
     plt.xticks(rotation=45)
@@ -86,62 +96,65 @@ def generar_pdf(nombre_archivo, df, figs, resumen_texto):
 st.set_page_config("Dashboard Contable", layout="wide")
 st.title("📊 Dashboard Contable para Empresas")
 
-archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx", "xls"])
+archivo = st.file_uploader("Sube tu archivo con datos de ventas (Excel o CSV)", type=["xlsx", "xls", "csv"])
 
 if archivo is not None:
-    extension = os.path.splitext(archivo.name)[1]
-    if extension in ['.xlsx', '.xls']:
-        try:
+    try:
+        nombre = archivo.name.lower()
+        if nombre.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(archivo, engine='openpyxl')
-            df = procesar_datos(df)
+        elif nombre.endswith('.csv'):
+            df = pd.read_csv(archivo)
+        else:
+            st.error("Formato de archivo no soportado.")
+            st.stop()
 
-            st.sidebar.header("📌 Filtros")
-            clientes = df['cliente'].unique().tolist()
-            categorias = df['categoria'].unique().tolist()
+        df = procesar_datos(df)
 
-            clientes_seleccionados = st.sidebar.multiselect("Clientes", clientes, default=clientes)
-            categorias_seleccionadas = st.sidebar.multiselect("Categorías", categorias, default=categorias)
+        st.sidebar.header("📌 Filtros")
+        clientes = df['cliente'].unique().tolist()
+        categorias = df['categoria'].unique().tolist()
 
-            fecha_min, fecha_max = df['Fecha'].min(), df['Fecha'].max()
-            fecha_inicio, fecha_fin = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
+        clientes_seleccionados = st.sidebar.multiselect("Clientes", clientes, default=clientes)
+        categorias_seleccionadas = st.sidebar.multiselect("Categorías", categorias, default=categorias)
 
-            if isinstance(fecha_inicio, list) or isinstance(fecha_inicio, tuple):
-                fecha_inicio, fecha_fin = fecha_inicio
+        fecha_min, fecha_max = df['Fecha'].min(), df['Fecha'].max()
+        fecha_inicio, fecha_fin = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
 
-            df_filtrado = filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
+        if isinstance(fecha_inicio, list) or isinstance(fecha_inicio, tuple):
+            fecha_inicio, fecha_fin = fecha_inicio
 
-            st.markdown(f"### Registros encontrados: {len(df_filtrado)}")
+        df_filtrado = filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
 
-            total = df_filtrado['venta'].sum()
-            iva = total * 0.19
-            neto = total - iva
-            ticket_promedio = df_filtrado.groupby('cliente')['venta'].sum().mean()
+        st.markdown(f"### Registros encontrados: {len(df_filtrado)}")
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🧾 Total Ventas", f"${total:,.2f}")
-            col2.metric("💵 Neto", f"${neto:,.2f}")
-            col3.metric("📈 Ticket Promedio", f"${ticket_promedio:,.2f}")
+        total = df_filtrado['venta'].sum()
+        iva = total * 0.19
+        neto = total - iva
+        ticket_promedio = df_filtrado.groupby('cliente')['venta'].sum().mean()
 
-            figs = generar_graficos(df_filtrado)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🧾 Total Ventas", f"${total:,.2f}")
+        col2.metric("💵 Neto", f"${neto:,.2f}")
+        col3.metric("📈 Ticket Promedio", f"${ticket_promedio:,.2f}")
 
-            for key in figs:
-                st.pyplot(figs[key])
+        figs = generar_graficos(df_filtrado)
 
-            resumen_texto = f"""
-            Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.
-            <br/><br/>
-            <b>Total:</b> ${total:,.2f}<br/>
-            <b>IVA (19%):</b> ${iva:,.2f}<br/>
-            <b>Neto:</b> ${neto:,.2f}<br/>
-            <b>Ticket Promedio por Cliente:</b> ${ticket_promedio:,.2f}
-            """
+        for key in figs:
+            st.pyplot(figs[key])
 
-            if st.button("📄 Generar Informe PDF Unificado"):
-                generar_pdf("informe_contable.pdf", df_filtrado, figs, resumen_texto)
-                with open("informe_contable.pdf", "rb") as f:
-                    st.download_button("📥 Descargar PDF", f, file_name="informe_contable.pdf")
+        resumen_texto = f"""
+        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.<br/><br/>
+        <b>Total:</b> ${total:,.2f}<br/>
+        <b>IVA (19%):</b> ${iva:,.2f}<br/>
+        <b>Neto:</b> ${neto:,.2f}<br/>
+        <b>Ticket Promedio por Cliente:</b> ${ticket_promedio:,.2f}
+        """
 
-        except Exception as e:
-            st.error(f"❌ Error al procesar el archivo: {e}")
-    else:
-        st.error("Por favor sube un archivo con extensión .xlsx o .xls")
+        if st.button("📄 Generar Informe PDF Unificado"):
+            generar_pdf("informe_contable.pdf", df_filtrado, figs, resumen_texto)
+            with open("informe_contable.pdf", "rb") as f:
+                st.download_button("📥 Descargar PDF", f, file_name="informe_contable.pdf")
+
+    except Exception as e:
+        st.error(f"❌ Error al procesar el archivo: {e}")
