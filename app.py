@@ -5,14 +5,10 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
-import calendar
 
-# Intentar poner los meses en español, si falla usa el nombre en inglés
-try:
-    import locale
-    locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
-except:
-    pass
+# Lista fija con los meses en español
+MESES_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+            'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
 # --- Funciones ---
 def procesar_datos(df):
@@ -20,7 +16,7 @@ def procesar_datos(df):
     df[col_fecha] = pd.to_datetime(df[col_fecha])
     df['Fecha'] = df[col_fecha]
     df['Mes'] = df['Fecha'].dt.month
-    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: calendar.month_name[x].capitalize())
+    df['Mes_Nombre'] = df['Mes'].apply(lambda x: MESES_ES[x - 1])
     df['Año'] = df['Fecha'].dt.year
     df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
@@ -38,12 +34,12 @@ def generar_graficos(df):
 
     df['Tipo Proveedor'] = df['categoria'].apply(lambda x: 'Nuevo' if 'nuevo' in str(x).lower() else 'Frecuente')
 
-    def crear_figura(df_group, tipo, title, xlabel='', ylabel='Ventas ($)', color='skyblue'):
+    def crear_figura(serie, tipo, title, xlabel='', ylabel='Ventas ($)', color='skyblue'):
         fig, ax = plt.subplots(figsize=(10, 4))
         if tipo == 'bar':
-            df_group.plot(kind=tipo, ax=ax, color=color, title=title)
+            serie.plot(kind=tipo, ax=ax, color=color, title=title)
         else:
-            df_group.plot(kind=tipo, ax=ax, title=title)
+            serie.plot(kind=tipo, ax=ax, title=title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         plt.xticks(rotation=45)
@@ -55,8 +51,9 @@ def generar_graficos(df):
     figs['ventas_categoria'] = crear_figura(df.groupby('categoria')['venta'].sum().sort_values(ascending=False), 'bar', 'Ventas por Categoría')
     figs['totales_anuales'] = crear_figura(df.groupby('Año')['venta'].sum(), 'bar', 'Total Ventas por Año', color=['#1f77b4', '#ff7f0e'])
 
+    # Comparativa anual por mes en orden español
+    pivot = df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').reindex(MESES_ES)
     fig5, ax5 = plt.subplots(figsize=(10, 4))
-    pivot = df.pivot_table(index='Mes_Nombre', columns='Año', values='venta', aggfunc='sum').reindex(calendar.month_name[1:], axis=0)
     pivot.plot(kind='bar', ax=ax5, title='Comparativa Mensual Año a Año')
     ax5.set_xlabel('Mes')
     ax5.set_ylabel('Ventas ($)')
@@ -96,19 +93,11 @@ def generar_pdf(nombre_archivo, df, figs, resumen_texto):
 st.set_page_config("Dashboard Contable", layout="wide")
 st.title("📊 Dashboard Contable para Empresas")
 
-archivo = st.file_uploader("Sube tu archivo con datos de ventas (Excel o CSV)", type=["xlsx", "xls", "csv"])
+archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx"])
 
-if archivo is not None:
+if archivo:
     try:
-        nombre = archivo.name.lower()
-        if nombre.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(archivo, engine='openpyxl')
-        elif nombre.endswith('.csv'):
-            df = pd.read_csv(archivo)
-        else:
-            st.error("Formato de archivo no soportado.")
-            st.stop()
-
+        df = pd.read_excel(archivo, engine='openpyxl')  # Recomiendo engine explícito para evitar errores
         df = procesar_datos(df)
 
         st.sidebar.header("📌 Filtros")
@@ -144,7 +133,8 @@ if archivo is not None:
             st.pyplot(figs[key])
 
         resumen_texto = f"""
-        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.<br/><br/>
+        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.
+        <br/><br/>
         <b>Total:</b> ${total:,.2f}<br/>
         <b>IVA (19%):</b> ${iva:,.2f}<br/>
         <b>Neto:</b> ${neto:,.2f}<br/>
