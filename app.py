@@ -6,12 +6,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 import calendar
-
-# Diccionario para meses en español (calendar.month_name está en inglés)
-MESES_ES = {
-    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio',
-    7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
-}
+import os
 
 # --- Funciones ---
 def procesar_datos(df):
@@ -19,7 +14,7 @@ def procesar_datos(df):
     df[col_fecha] = pd.to_datetime(df[col_fecha])
     df['Fecha'] = df[col_fecha]
     df['Mes'] = df['Fecha'].dt.month
-    df['Mes_Nombre'] = df['Mes'].map(MESES_ES)
+    df['Mes_Nombre'] = df['Fecha'].dt.month.apply(lambda x: calendar.month_name[x].capitalize())
     df['Año'] = df['Fecha'].dt.year
     df['Periodo'] = df['Fecha'].dt.to_period('M')
     return df
@@ -93,62 +88,60 @@ st.title("📊 Dashboard Contable para Empresas")
 
 archivo = st.file_uploader("Sube tu archivo Excel con datos de ventas", type=["xlsx", "xls"])
 
-if archivo:
-    try:
-        if archivo.name.endswith('.xlsx'):
+if archivo is not None:
+    extension = os.path.splitext(archivo.name)[1]
+    if extension in ['.xlsx', '.xls']:
+        try:
             df = pd.read_excel(archivo, engine='openpyxl')
-        elif archivo.name.endswith('.xls'):
-            df = pd.read_excel(archivo, engine='xlrd')
-        else:
-            st.error("❌ Formato no soportado. Por favor sube un archivo .xlsx o .xls válido.")
-            st.stop()
+            df = procesar_datos(df)
 
-        df = procesar_datos(df)
+            st.sidebar.header("📌 Filtros")
+            clientes = df['cliente'].unique().tolist()
+            categorias = df['categoria'].unique().tolist()
 
-        st.sidebar.header("📌 Filtros")
-        clientes = df['cliente'].unique().tolist()
-        categorias = df['categoria'].unique().tolist()
+            clientes_seleccionados = st.sidebar.multiselect("Clientes", clientes, default=clientes)
+            categorias_seleccionadas = st.sidebar.multiselect("Categorías", categorias, default=categorias)
 
-        clientes_seleccionados = st.sidebar.multiselect("Clientes", clientes, default=clientes)
-        categorias_seleccionadas = st.sidebar.multiselect("Categorías", categorias, default=categorias)
+            fecha_min, fecha_max = df['Fecha'].min(), df['Fecha'].max()
+            fecha_inicio, fecha_fin = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
 
-        fecha_min, fecha_max = df['Fecha'].min(), df['Fecha'].max()
-        fecha_inicio, fecha_fin = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
+            if isinstance(fecha_inicio, list) or isinstance(fecha_inicio, tuple):
+                fecha_inicio, fecha_fin = fecha_inicio
 
-        if isinstance(fecha_inicio, list) or isinstance(fecha_inicio, tuple):
-            fecha_inicio, fecha_fin = fecha_inicio
+            df_filtrado = filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
 
-        df_filtrado = filtrar_datos(df, clientes_seleccionados, categorias_seleccionadas, pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
+            st.markdown(f"### Registros encontrados: {len(df_filtrado)}")
 
-        st.markdown(f"### Registros encontrados: {len(df_filtrado)}")
+            total = df_filtrado['venta'].sum()
+            iva = total * 0.19
+            neto = total - iva
+            ticket_promedio = df_filtrado.groupby('cliente')['venta'].sum().mean()
 
-        total = df_filtrado['venta'].sum()
-        iva = total * 0.19
-        neto = total - iva
-        ticket_promedio = df_filtrado.groupby('cliente')['venta'].sum().mean()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🧾 Total Ventas", f"${total:,.2f}")
+            col2.metric("💵 Neto", f"${neto:,.2f}")
+            col3.metric("📈 Ticket Promedio", f"${ticket_promedio:,.2f}")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("🧾 Total Ventas", f"${total:,.2f}")
-        col2.metric("💵 Neto", f"${neto:,.2f}")
-        col3.metric("📈 Ticket Promedio", f"${ticket_promedio:,.2f}")
+            figs = generar_graficos(df_filtrado)
 
-        figs = generar_graficos(df_filtrado)
+            for key in figs:
+                st.pyplot(figs[key])
 
-        for key in figs:
-            st.pyplot(figs[key])
+            resumen_texto = f"""
+            Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.
+            <br/><br/>
+            <b>Total:</b> ${total:,.2f}<br/>
+            <b>IVA (19%):</b> ${iva:,.2f}<br/>
+            <b>Neto:</b> ${neto:,.2f}<br/>
+            <b>Ticket Promedio por Cliente:</b> ${ticket_promedio:,.2f}
+            """
 
-        resumen_texto = f"""
-        Este informe presenta un análisis detallado de las ventas, categorizadas por cliente, tipo de proveedor y periodo mensual/anual.<br/><br/>
-        <b>Total:</b> ${total:,.2f}<br/>
-        <b>IVA (19%):</b> ${iva:,.2f}<br/>
-        <b>Neto:</b> ${neto:,.2f}<br/>
-        <b>Ticket Promedio por Cliente:</b> ${ticket_promedio:,.2f}
-        """
+            if st.button("📄 Generar Informe PDF Unificado"):
+                generar_pdf("informe_contable.pdf", df_filtrado, figs, resumen_texto)
+                with open("informe_contable.pdf", "rb") as f:
+                    st.download_button("📥 Descargar PDF", f, file_name="informe_contable.pdf")
 
-        if st.button("📄 Generar Informe PDF Unificado"):
-            generar_pdf("informe_contable.pdf", df_filtrado, figs, resumen_texto)
-            with open("informe_contable.pdf", "rb") as f:
-                st.download_button("📥 Descargar PDF", f, file_name="informe_contable.pdf")
-
-    except Exception as e:
-        st.error(f"❌ Error al procesar el archivo: {e}")
+        except Exception as e:
+            st.error(f"❌ Error al procesar el archivo: {e}")
+    else:
+        st.error("Por favor sube un archivo con extensión .xlsx o .xls")
